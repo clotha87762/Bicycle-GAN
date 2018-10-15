@@ -39,7 +39,7 @@ class Train(object):
         self.imsize = args.fineSize
         
         self.dataset_mode = args.dataset_mode
-        self.direction = args.direction
+        self.A2B = True if args.direction == 'AtoB' else False
         
         
         self.num_thread = args.num_thread
@@ -101,7 +101,7 @@ class Train(object):
 
 
     # code borrow from https://github.com/junyanz/BicycleGAN/blob/master/models/networks.py
-    def get_scheduler(optimizer):
+    def get_scheduler(self, optimizer):
         
         def lambda_rule(epoch):
             lr_l = 1.0 - max(0, epoch - 100) / float(100 + 1)
@@ -110,7 +110,27 @@ class Train(object):
         scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
         
         return scheduler
-
+    
+    def set_input(self, _input):
+        
+        self.realA = _input['A' if self.A2B else 'B'].to(self.device)
+        self.realB = _input['B' if self.A2B else 'A'].to(self.device)
+        
+        assert self.realA.size[0] == self.realB.size[0]
+        
+        
+        # 這樣動態調整會不會出問題ㄋ
+        self.batch_size = self.realA.size[0]
+        
+        self.img_path = _input['A_path' if self.A2B else 'B_path']
+    
+    def set_gan_loss(self, gan_mode = 'lsgan'):
+        if gan_mode == 'lsgan':
+            self.gan_loss = nn.MSELoss()
+        elif gan_mode == 'dcgan':
+            self.gan_loss = nn.BCELoss()
+        else:
+            raise NotImplementedError('only these tow qqq')
 
     def initialize(self):
         
@@ -157,24 +177,76 @@ class Train(object):
         self.optimizers.append(self.opt_d2)
         self.optimizers.append(self.opt_e)
         
+        self.set_gan_loss(gan_mode = self.gan_mode)
         
         self.setup()
     
-    def random_sample_z(batch, nz):
-        return torch.randn(batch, nz)
+    def random_sample_z(self, batch, nz):
+        return torch.randn(batch, nz).to(self.device)
+    
+    def encode(self, _input):
+        mu, logvar = self.netE.forward(_input)
+        std = logvar.mul(0.5).exp_()
+        eps = self.random_sample_z(std.size(0), std.size(1))
+        z = eps.mul(std).add_(mu)
+        return z, mu, logvar
+
     
     def forward(self):
-        pass
+        
+        half = self.batch_size // 2
+        self.realA_encode = self.realA[:half]
+        self.realA_random = self.realA[half:]
+        self.realB_encode = self.realB[:half]
+        self.realB_random = self.realB[half:]
+        
+        self.a_latent , self.mu , self.var = self.encode(realB_encode)
+        self.fakeB_encode = self.generator(realA_encode , a_latent)
+        
+        self.random_z = self.random_sample_z(self.batch_size, self.nz)
+        self.fakeB_random = self.generator( realA_random , random_z)
+        
+        self.mu2 , self.var2 = self.encoder(fakeB_random)
+        
+        
     
     def update_EG(self):
-        pass
+        # I don't know why the origin implementation set discriminator requires_grad = False QAQ
+        
+        self.opt_e.zero_grad()
+        self.opt_g.zero_grad()
+        self.backpropEG()
     
     def update_D(self):
         pass
     
-    def backpropEG(self):
+    def backpropZ(self):
         pass
     
+    def backpropEG(self):
+        
+        # GAN loss
+        dis_out1 = self.discriminator1(self.fakeB_encode)
+        dis_out2 = self.discriminator2(self.fakeB_random)
+        
+        real_target = torch.tensor(1.0).expand_as(gan_loss1).to(self.device)
+        fake_target = torch.tensor(0.0).expand_as(gan_loss2).to(self.device)
+        
+        self.gan_loss1 = self.gan_loss(dis_out1 , real_target)
+        self.gan_loss2 = self.gan_loss(dis_out2 , real_target)
+        
+        self.gan_loss = (gan_loss1 * self.lambda_GAN )   +  ( gan_loss2 * self.lambda_GAN2) 
+        
+        # L1 loss of images
+        self.l1_loss = nn.L1Loss(fakeB_encode ,  realB_encode) * self.lambda_l1
+        
+        # KL loss for the vae encoder
+        kl_element = self.mu.pow(2).add_(self.logvar.exp()).mul_(-1).add_(1).add_(self.logvar)
+        self.kl_loss = torch.sum(kl_element).mul_(-0.5) * self.lambda_kl
+        
+        self.eg_loss = self.gan_loss + self.l1_loss + self.kl_loss
+        self.eg_loss.backward(retain_graph = True)
+        
     def backpropD(self):
         pass
     

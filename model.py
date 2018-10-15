@@ -372,6 +372,7 @@ class Encoder_resnet(nn.Module):
         
         mu = self.fc(out)
         var = self.fc_var(out)
+        
         return mu , var
         
 
@@ -462,6 +463,7 @@ class Discriminator(nn.Module):
         
         
         mul = min(2**(num_layer) , 8)
+        
         sequence += [
                 nn.Conv2d( next_feature_count, ndf * mul ,
                           kernel_size=4, stride=1, padding=1),
