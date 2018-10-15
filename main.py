@@ -31,7 +31,7 @@ parser.add_argument('--nef', type=int, default=64, help='# of encoder filters in
 parser.add_argument('--ngf', type=int, default=64, help='# of gen filters in first conv layer')
 parser.add_argument('--ndf', type=int, default=64, help='# of discrim filters in first conv layer')
 parser.add_argument('--gpu_ids', type=str, default='0', help='gpu ids: e.g. 0  0,1,2, 0,2, -1 for CPU mode')
-parser.add_argument('--name', type=str, default='', help='name of the experiment. It decides where to store samples and models')
+parser.add_argument('--run_name', type=str, default='train', help='name of the experiment. It decides where to store samples and models')
 parser.add_argument('--resize_or_crop', type=str, default='resize_and_crop', help='not implemented')
 parser.add_argument('--dataset_mode', type=str, default='aligned', help='aligned,single')
 parser.add_argument('--model', type=str, default='bicycle_gan', help='chooses which model to use. bicycle,, ...')
