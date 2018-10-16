@@ -18,6 +18,8 @@ import evaluate
 
 from tensorboardX import SummaryWriter
 
+# all codes in the 'data' folder is borrow from the original bicycle gan github
+
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--dataroot', required=True, help='path to images (should have subfolders trainA, trainB, valA, valB, etc)')
@@ -76,7 +78,7 @@ parser.add_argument('--display_port', type=int, default=8097, help='visdom displ
 parser.add_argument('--display_server', type=str, default="http://localhost", help='visdom server of the web display')
 parser.add_argument('--update_html_freq', type=int, default=4000, help='frequency of saving training results to html')
 parser.add_argument('--print_freq', type=int, default=100, help='frequency of showing training results on console')
-parser.add_argument('--sample_freq', type=int, default=10000, help='frequency of saving the latest results')
+parser.add_argument('--sample_freq', type=int, default=200, help='frequency of saving the latest results')
 parser.add_argument('--save_freq', type=int, default=5, help='frequency of saving checkpoints at the end of epochs')
 parser.add_argument('--train_over', action='store_true', help='continue training: load the latest model')
 #parser.add_argument('--epoch_count', type=int, default=1, help='the starting epoch count, we save the model by <epoch_count>, <epoch_count>+<save_latest_freq>, ...')

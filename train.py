@@ -9,7 +9,7 @@ from torch.optim import lr_scheduler
 import torchvision.datasets as datasets
 import torchvision.models as models
 import torchvision.transforms as transforms
-import torcvision.utils as utils
+import torcvision.utils as vutils
 
 import os
 from train import Train
@@ -17,13 +17,20 @@ from evaluate import Evaluate
 import evaluate
 import model
 
+from data import CreateDataLoader
 from tensorboardX import SummaryWriter
+
+import time
 
 class Train(object):
     
     def __init__(self , args):
         
+        self.opt = args
+        
         self.batch_size = args.batch_size
+        self.epoch = args.epoch
+        
         self.in_dim = args.input_nc
         self.out_dim = args.output_nc
         self.nz = args.nz
@@ -45,6 +52,7 @@ class Train(object):
         self.num_thread = args.num_thread
         self.ckpt_dir = args.ckpt_dir
         self.sample_dir = args.sample_dir
+        self.log_dir = args.log_dir
         
         self.num_d = args.num_Ds
         self.gan_mode = args.gan_mode
@@ -64,6 +72,7 @@ class Train(object):
         
         self.print_freq = args.print_freq
         self.save_freq = args.save_freq
+        self.sample_freq = args.sample_freq
         self.train_over = args.train_over
         
         self.verbose = args.verbose
@@ -110,6 +119,12 @@ class Train(object):
         scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
         
         return scheduler
+    
+    def update_learning_rate(self):
+        for scheduler in self.schedulers:
+            scheduler.step()
+        lr = self.optimizers[0].param_groups[0]['lr']
+        print('learning rate = %.7f' % lr)
     
     def set_input(self, _input):
         
@@ -220,16 +235,19 @@ class Train(object):
         self.opt_e.step()
         self.opt_g.step()
         
+        
+        self.opt_e.zero_grad()
+        self.opt_g.zero_grad()
         self.backpropZ_for_Galone()
         self.opt_g.step()
     
     def update_D(self):
         
         dis_out1_real = self.discriminator1(self.realB_encode)
-        dis_out1_fake = self.discriminator2(self.fakeB_encode)
+        dis_out1_fake = self.discriminator2(self.fakeB_encode.detach())
         
         dis_out2_real = self.discriminator2(self.realB_random)
-        dis_out2_fake = self.discriminator2(self.fakeB_random)
+        dis_out2_fake = self.discriminator2(self.fakeB_random.detach())
         
         real_target = torch.tensor(1.0).expand_as(dis_out1_real).to(self.device)
         fake_target = torch.tensor(0.0).expand_as(dis_out1_fake).to(self.device)
@@ -239,8 +257,8 @@ class Train(object):
 
         self.opt_d1.zero_grad() 
         
-        d_loss1 = gan_loss1_fake + gan_loss1_real    
-        d_loss1.backward()
+        self.d_loss1 = gan_loss1_fake + gan_loss1_real    
+        self.d_loss1.backward()
         
         self.opt_d1.step()
         
@@ -249,8 +267,8 @@ class Train(object):
         
         self.opt_d2.zero_grad()
         
-        d_loss2 = gan_loss2_fake + gan_loss2_real
-        d_loss2.backward()
+        self.d_loss2 = gan_loss2_fake + gan_loss2_real
+        self.d_loss2.backward()
         
         self.opt_d2.step()
         
@@ -293,4 +311,78 @@ class Train(object):
         self.update_D()
     
     def train(self):
-        pass
+        
+        dataloader = CreateDataLoader(self.opt)
+        
+        writer = SummaryWriter( log_dir = self.log_dir)
+        
+        for i in range(self.epoch):
+            
+            epoch_start = time.time()
+            epoch_step = 0
+            
+            for j , data in enumerate(dataloader):
+                
+                self.set_input(data)
+                self.update_bicycleGAN()
+                
+                self.step = self.step + 1
+                
+                epoch_step += data['A'].size[0]
+                
+                if i % self.save_freq == 0:
+                    torch.save(
+                            { 'generator' : self.generator.state_dict(),
+                              'discriminator1' : self.discriminator1.state_dict(),
+                              'discriminator2' : self.discriminator2.state_dict(),
+                              'encoder' : self.encoder.state_dict(),
+                              'opt_g' : self.opt_g,
+                              'opt_d1' : self.opt_d1,
+                              'opt_d2' : self.opt_d2,
+                              'opt_e' : self.opt_e,
+                              'step' : self.step} , os.path.join(self.ckpt_dir,self.run_name+'.ckpt'))
+                
+                if self.step % self.print_freq == 0 :
+                    print ("[Epoch %d/%d] [Batch %d/%d] [D loss1: %f] [D loss2: %f] [Z loss: %f] [G loss: %f]" % \
+                       (i, self.epoch  , j, len(dataloader), self.d_loss1.item(), self.d_loss2.item() , self.z_loss.item(), self.eg_loss.item() ))
+                
+                if self.step % 200 == 0 :
+                    writer.add_scalar('loss/g1_loss' , self.gan_loss1 , self.step)
+                    writer.add_scalar('loss/g2_loss' , self.gan_loss2 , self.step)
+                    writer.add_scalar('loss/d1_loss' , self.d_loss1 , self.step)
+                    writer.add_scalar('loss/d2_loss' , self.d_loss2 , self.step)
+                    writer.add_scalar('loss/z_loss' , self.z_loss , self.step)
+                    writer.add_scalar('loss/l1_loss' , self.l1_loss , self.step)
+                    writer.add_scalar('loss/kl_loss' , self.kl_loss , self.step)
+                
+                if self.step % self.sample_freq == 0 :
+                    encode_pair = torch.cat( [self.realA_encode , self.realB_encode , self.fakeB_encode ] , dim = 0 )
+                    vutils.save_image( encode_pair , sample_path + '/%d.png' % step , normalize=True)
+                
+                # write the logs
+            #############################################
+            epoch_end = time.time()
+            self.update_learning_rate()
+            
+            if i % self.save_freq == 0:
+                    torch.save({ 'generator' : self.generator.state_dict(),
+                              'discriminator1' : self.discriminator1.state_dict(),
+                              'discriminator2' : self.discriminator2.state_dict(),
+                              'encoder' : self.encoder.state_dict(),
+                              'opt_g' : self.opt_g,
+                              'opt_d1' : self.opt_d1,
+                              'opt_d2' : self.opt_d2,
+                              'opt_e' : self.opt_e,
+                              'step' : self.step} , os.path.join(self.ckpt_dir,self.run_name+'.ckpt'))
+            
+            
+            
+        
+        
+        
+        
+        
+        
+        
+        
+        
