@@ -124,11 +124,11 @@ class Train(object):
         
         self.img_path = _input['A_path' if self.A2B else 'B_path']
     
-    def set_gan_loss(self, gan_mode = 'lsgan'):
+    def set_gan_criterion(self, gan_mode = 'lsgan'):
         if gan_mode == 'lsgan':
-            self.gan_loss = nn.MSELoss()
+            self.gan_criterion = nn.MSELoss()
         elif gan_mode == 'dcgan':
-            self.gan_loss = nn.BCELoss()
+            self.gan_criterion = nn.BCELoss()
         else:
             raise NotImplementedError('only these tow qqq')
 
@@ -177,7 +177,7 @@ class Train(object):
         self.optimizers.append(self.opt_d2)
         self.optimizers.append(self.opt_e)
         
-        self.set_gan_loss(gan_mode = self.gan_mode)
+        self.set_gan_criterion(gan_mode = self.gan_mode)
         
         self.setup()
     
@@ -216,12 +216,49 @@ class Train(object):
         self.opt_e.zero_grad()
         self.opt_g.zero_grad()
         self.backpropEG()
+        
+        self.opt_e.step()
+        self.opt_g.step()
+        
+        self.backpropZ_for_Galone()
+        self.opt_g.step()
     
     def update_D(self):
-        pass
+        
+        dis_out1_real = self.discriminator1(self.realB_encode)
+        dis_out1_fake = self.discriminator2(self.fakeB_encode)
+        
+        dis_out2_real = self.discriminator2(self.realB_random)
+        dis_out2_fake = self.discriminator2(self.fakeB_random)
+        
+        real_target = torch.tensor(1.0).expand_as(dis_out1_real).to(self.device)
+        fake_target = torch.tensor(0.0).expand_as(dis_out1_fake).to(self.device)
+        
+        gan_loss1_fake = self.gan_criterion( dis_out1_fake , fake_target)
+        gan_loss1_real = self.gan_criterion( dis_out1_real , real_target)
+
+        self.opt_d1.zero_grad() 
+        
+        d_loss1 = gan_loss1_fake + gan_loss1_real    
+        d_loss1.backward()
+        
+        self.opt_d1.step()
+        
+        gan_loss2_fake = self.gan_criterion( dis_out2_fake , fake_target)
+        gan_loss2_real = self.gan_criterion( dis_out2_real , real_target)
+        
+        self.opt_d2.zero_grad()
+        
+        d_loss2 = gan_loss2_fake + gan_loss2_real
+        d_loss2.backward()
+        
+        self.opt_d2.step()
+        
+        
     
-    def backpropZ(self):
-        pass
+    def backpropZ_for_Galone(self):
+        self.z_loss = torch.mean( torch.abs(self.mu2 - self.random_z )) * self.lambda_z
+        self.z_loss.backward()
     
     def backpropEG(self):
         
@@ -229,11 +266,11 @@ class Train(object):
         dis_out1 = self.discriminator1(self.fakeB_encode)
         dis_out2 = self.discriminator2(self.fakeB_random)
         
-        real_target = torch.tensor(1.0).expand_as(gan_loss1).to(self.device)
-        fake_target = torch.tensor(0.0).expand_as(gan_loss2).to(self.device)
+        real_target = torch.tensor(1.0).expand_as(dis_out1).to(self.device)
+        fake_target = torch.tensor(0.0).expand_as(dis_out2).to(self.device)
         
-        self.gan_loss1 = self.gan_loss(dis_out1 , real_target)
-        self.gan_loss2 = self.gan_loss(dis_out2 , real_target)
+        self.gan_loss1 = self.gan_criterion(dis_out1 , real_target)
+        self.gan_loss2 = self.gan_criterion(dis_out2 , real_target)
         
         self.gan_loss = (gan_loss1 * self.lambda_GAN )   +  ( gan_loss2 * self.lambda_GAN2) 
         
@@ -251,7 +288,9 @@ class Train(object):
         pass
     
     def update_bicycleGAN(self):
-        pass
+        self.forward()
+        self.update_EG()
+        self.update_D()
     
     def train(self):
         pass
