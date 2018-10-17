@@ -9,12 +9,9 @@ from torch.optim import lr_scheduler
 import torchvision.datasets as datasets
 import torchvision.models as models
 import torchvision.transforms as transforms
-import torcvision.utils as vutils
+import torchvision.utils as vutils
 
 import os
-from train import Train
-from evaluate import Evaluate
-import evaluate
 import model
 
 from data import CreateDataLoader
@@ -27,7 +24,8 @@ class Train(object):
     def __init__(self , args):
         
         self.opt = args
-        
+        self.run_name =  args.run_name
+
         self.batch_size = args.batch_size
         self.epoch = args.epoch
         
@@ -49,10 +47,10 @@ class Train(object):
         self.A2B = True if args.direction == 'AtoB' else False
         
         
-        self.num_thread = args.num_thread
-        self.ckpt_dir = args.ckpt_dir
-        self.sample_dir = args.sample_dir
-        self.log_dir = args.log_dir
+        self.num_thread = args.num_threads
+        self.ckpt_dir = os.path.join( args.ckpt_dir ,  self.run_name)
+        self.sample_dir = os.path.join( args.sample_dir, self.run_name)
+        self.log_dir = os.path.join( args.log_dir, self.run_name)
         
         self.num_d = args.num_Ds
         self.gan_mode = args.gan_mode
@@ -80,7 +78,6 @@ class Train(object):
         self.gpu_ids = args.gpu_ids
         self.device = torch.device('cuda:{}'.format(self.gpu_ids[0])) if self.gpu_ids else torch.device('cpu')
         
-        self.run_name =  args.run_names
         self.step = 0
     
         
@@ -92,10 +89,10 @@ class Train(object):
 
         # load models
         if not self.train_over:
-            ckpt_path = os.path.join(self.ckpt_dir,self.run_name)
-            if os.path.isfile(os.path.join(ckpt_path,args.run_name+'.ckpt')):
-                print('found ckpt file' + os.path.join(ckpt_path,args.run_name+'.ckpt'))
-                ckpt = torch.load(os.path.join(ckpt_path,args.run_name+'.ckpt'))
+            #ckpt_path = os.path.join(self.ckpt_dir,self.run_name)
+            if os.path.isfile(os.path.join(self.ckpt_dir,self.run_name+'.ckpt')):
+                print('found ckpt file' + os.path.join(self.ckpt_dir, self.run_name+'.ckpt'))
+                ckpt = torch.load(os.path.join(self.ckpt_dir,self.run_name+'.ckpt'))
                 self.generator.load_state_dict(ckpt['generator'])
                 self.discriminator1.load_state_dict(ckpt['discriminator1'])
                 self.discriminator2.load_state_dict(ckpt['discriminator2'])
@@ -131,11 +128,13 @@ class Train(object):
         self.realA = _input['A' if self.A2B else 'B'].to(self.device)
         self.realB = _input['B' if self.A2B else 'A'].to(self.device)
         
-        assert self.realA.size[0] == self.realB.size[0]
+        #print(self.realA.size())
+        
+        assert self.realA.size(0) == self.realB.size(0)
         
         
         # 這樣動態調整會不會出問題ㄋ
-        self.batch_size = self.realA.size[0]
+        self.batch_size = self.realA.size(0)
         
         self.img_path = _input['A_path' if self.A2B else 'B_path']
     
@@ -152,11 +151,11 @@ class Train(object):
         if self.imsize == 256:
             num_down = 8
             num_layer = 3
-            blocks = 4
+            blocks = 5
         elif self.imsize == 128:
             num_down = 7
             num_layer = 2
-            blocks = 3
+            blocks = 4
         else:
             raise NotImplementedError('not support other size')
         
@@ -167,12 +166,12 @@ class Train(object):
             self.generator = model.Generator_Unet_all(self.in_dim,self.out_dim, self.nz, self.ngf ,self.dropout, 
                                                      norm = self.norm, nl = self.nl , upsample = self.upsample , num_down = num_down )
         
-        self.discriminator1 = model.Discriminator( self.in_dim , self.imsize , self.nz , self.ndf , dropout = self.dropout , self.num_d = 2, 
+        self.discriminator1 = model.Discriminator( self.in_dim , self.imsize , self.nz , self.ndf , dropout = self.dropout , num_d = self.num_d, 
                                                   norm = self.norm , gan_mode = self.gan_mode , num_layer = num_layer)
-        self.discriminator2 = model.Discriminator( self.in_dim , self.imsize , self.nz , self.ndf , dropout = self.dropout , self.num_d = 2, 
+        self.discriminator2 = model.Discriminator( self.in_dim , self.imsize , self.nz , self.ndf , dropout = self.dropout , num_d = self.num_d, 
                                                   norm = self.norm , gan_mode = self.gan_mode , num_layer = num_layer)
         
-        self.encoder = model.Encoder_resnet( ndf = self.nef , blocks = blocks ,in_dim = self.in_dim , 
+        self.encoder = model.Encoder_resnet( ndf = self.nef , nz = self.nz ,blocks = blocks ,in_dim = self.in_dim , 
                                             out_dim = self.out_dim , norm = self.norm  , nl =  self.nl)
         
         
@@ -193,6 +192,7 @@ class Train(object):
         self.optimizers.append(self.opt_e)
         
         self.set_gan_criterion(gan_mode = self.gan_mode)
+        self.reconstruction_loss = nn.L1Loss()
         
         self.setup()
     
@@ -200,11 +200,21 @@ class Train(object):
         return torch.randn(batch, nz).to(self.device)
     
     def encode(self, _input):
-        mu, logvar = self.netE.forward(_input)
+        mu, logvar = self.encoder.forward(_input)
         std = logvar.mul(0.5).exp_()
         eps = self.random_sample_z(std.size(0), std.size(1))
         z = eps.mul(std).add_(mu)
         return z, mu, logvar
+    
+    def calc_gan_loss(self, dis_outs , target_value ):
+        
+        losses =[]
+        for dis_out in dis_outs:
+            target = torch.tensor( target_value ).expand_as(dis_out).to(self.device)
+            losses.append( self.gan_criterion(dis_out, target ) )
+        
+        loss = sum(losses)
+        return loss
 
     
     def forward(self):
@@ -215,13 +225,13 @@ class Train(object):
         self.realB_encode = self.realB[:half]
         self.realB_random = self.realB[half:]
         
-        self.a_latent , self.mu , self.var = self.encode(realB_encode)
-        self.fakeB_encode = self.generator(realA_encode , a_latent)
+        self.a_latent , self.mu , self.logvar = self.encode(self.realB_encode)
+        self.fakeB_encode = self.generator(self.realA_encode , self.a_latent)
         
-        self.random_z = self.random_sample_z(self.batch_size, self.nz)
-        self.fakeB_random = self.generator( realA_random , random_z)
+        self.random_z = self.random_sample_z(self.realA_encode.size(0), self.nz)
+        self.fakeB_random = self.generator( self.realA_random , self.random_z)
         
-        self.mu2 , self.var2 = self.encoder(fakeB_random)
+        self.mu2 , self.logvar2 = self.encoder( self.fakeB_random)
         
         
     
@@ -249,11 +259,11 @@ class Train(object):
         dis_out2_real = self.discriminator2(self.realB_random)
         dis_out2_fake = self.discriminator2(self.fakeB_random.detach())
         
-        real_target = torch.tensor(1.0).expand_as(dis_out1_real).to(self.device)
-        fake_target = torch.tensor(0.0).expand_as(dis_out1_fake).to(self.device)
+        real_target = 1.0 #torch.tensor(1.0).expand_as(dis_out1_real).to(self.device)
+        fake_target = 0.0 #torch.tensor(0.0).expand_as(dis_out1_fake).to(self.device)
         
-        gan_loss1_fake = self.gan_criterion( dis_out1_fake , fake_target)
-        gan_loss1_real = self.gan_criterion( dis_out1_real , real_target)
+        gan_loss1_fake = self.calc_gan_loss(dis_out1_fake , fake_target) #self.gan_criterion( dis_out1_fake , fake_target)
+        gan_loss1_real = self.calc_gan_loss(dis_out1_real , real_target) #self.gan_criterion( dis_out1_real , real_target)
 
         self.opt_d1.zero_grad() 
         
@@ -262,8 +272,8 @@ class Train(object):
         
         self.opt_d1.step()
         
-        gan_loss2_fake = self.gan_criterion( dis_out2_fake , fake_target)
-        gan_loss2_real = self.gan_criterion( dis_out2_real , real_target)
+        gan_loss2_fake = self.calc_gan_loss(dis_out2_fake , fake_target) 
+        gan_loss2_real = self.calc_gan_loss(dis_out2_real , real_target)
         
         self.opt_d2.zero_grad()
         
@@ -284,16 +294,19 @@ class Train(object):
         dis_out1 = self.discriminator1(self.fakeB_encode)
         dis_out2 = self.discriminator2(self.fakeB_random)
         
-        real_target = torch.tensor(1.0).expand_as(dis_out1).to(self.device)
-        fake_target = torch.tensor(0.0).expand_as(dis_out2).to(self.device)
+        #real_target = torch.tensor(1.0).expand_as(dis_out1).to(self.device)
+        #fake_target = torch.tensor(0.0).expand_as(dis_out2).to(self.device)
         
-        self.gan_loss1 = self.gan_criterion(dis_out1 , real_target)
-        self.gan_loss2 = self.gan_criterion(dis_out2 , real_target)
+        real_target = 1.0
+        fake_target = 0.0
         
-        self.gan_loss = (gan_loss1 * self.lambda_GAN )   +  ( gan_loss2 * self.lambda_GAN2) 
+        self.gan_loss1 = self.calc_gan_loss(dis_out1 , real_target)#self.gan_criterion(dis_out1 , real_target)
+        self.gan_loss2 = self.calc_gan_loss(dis_out2 , real_target)#self.gan_criterion(dis_out2 , real_target)
+        
+        self.gan_loss = ( self.gan_loss1 * self.lambda_GAN )   +  ( self.gan_loss2 * self.lambda_GAN2) 
         
         # L1 loss of images
-        self.l1_loss = nn.L1Loss(fakeB_encode ,  realB_encode) * self.lambda_l1
+        self.l1_loss = self.reconstruction_loss( self.fakeB_encode ,  self.realB_encode) * self.lambda_l1
         
         # KL loss for the vae encoder
         kl_element = self.mu.pow(2).add_(self.logvar.exp()).mul_(-1).add_(1).add_(self.logvar)
@@ -328,22 +341,12 @@ class Train(object):
                 
                 self.step = self.step + 1
                 
-                epoch_step += data['A'].size[0]
+                epoch_step += data['A'].size(0)
                 
-                if i % self.save_freq == 0:
-                    torch.save(
-                            { 'generator' : self.generator.state_dict(),
-                              'discriminator1' : self.discriminator1.state_dict(),
-                              'discriminator2' : self.discriminator2.state_dict(),
-                              'encoder' : self.encoder.state_dict(),
-                              'opt_g' : self.opt_g,
-                              'opt_d1' : self.opt_d1,
-                              'opt_d2' : self.opt_d2,
-                              'opt_e' : self.opt_e,
-                              'step' : self.step} , os.path.join(self.ckpt_dir,self.run_name+'.ckpt'))
                 
-                if self.step % self.print_freq == 0 :
-                    print ("[Epoch %d/%d] [Batch %d/%d] [D loss1: %f] [D loss2: %f] [Z loss: %f] [G loss: %f]" % \
+                
+                #if self.step % self.print_freq == 0 :
+                print ("[Epoch %d/%d] [Batch %d/%d] [D loss1: %f] [D loss2: %f] [Z loss: %f] [G loss: %f]" % \
                        (i, self.epoch  , j, len(dataloader), self.d_loss1.item(), self.d_loss2.item() , self.z_loss.item(), self.eg_loss.item() ))
                 
                 if self.step % 200 == 0 :
@@ -357,7 +360,7 @@ class Train(object):
                 
                 if self.step % self.sample_freq == 0 :
                     encode_pair = torch.cat( [self.realA_encode , self.realB_encode , self.fakeB_encode ] , dim = 0 )
-                    vutils.save_image( encode_pair , sample_path + '/%d.png' % step , normalize=True)
+                    vutils.save_image( encode_pair , self.sample_dir + '/%d.png' % self.step , normalize=True)
                 
                 # write the logs
             #############################################
@@ -369,10 +372,10 @@ class Train(object):
                               'discriminator1' : self.discriminator1.state_dict(),
                               'discriminator2' : self.discriminator2.state_dict(),
                               'encoder' : self.encoder.state_dict(),
-                              'opt_g' : self.opt_g,
-                              'opt_d1' : self.opt_d1,
-                              'opt_d2' : self.opt_d2,
-                              'opt_e' : self.opt_e,
+                              'opt_g' : self.opt_g.state_dict(),
+                              'opt_d1' : self.opt_d1.state_dict(),
+                              'opt_d2' : self.opt_d2.state_dict(),
+                              'opt_e' : self.opt_e.state_dict(),
                               'step' : self.step} , os.path.join(self.ckpt_dir,self.run_name+'.ckpt'))
             
             

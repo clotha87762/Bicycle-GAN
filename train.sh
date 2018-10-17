@@ -1,0 +1,11 @@
+CUDA_VISIBLE_DEVICES=0 python3 ./main.py \
+  --dataroot ./datasets/night2day \
+  --run_name debug \
+  --direction AtoB \
+  --loadSize 286 \
+  --fineSize 256 \
+  --nz 8 \
+  --input_nc 3 \
+  --niter 50 \
+  --niter_decay 50 \
+  --dropout 

@@ -9,7 +9,7 @@ import torch.autograd as autograd
 import torchvision.datasets as datasets
 import torchvision.models as models
 import torchvision.transforms as transforms
-import torcvision.utils as utils
+import torchvision.utils as utils
 import torch.nn.functional as F
 import functools
 from torch.nn import init
@@ -47,8 +47,11 @@ def init_weights(net, init_type='normal', gain=0.02):
 def init_net(net, init_type='xavier', gpu_ids=[]):
     if len(gpu_ids) > 0:
         assert(torch.cuda.is_available())
-        net.to(gpu_ids[0])
-        net = torch.nn.DataParallel(net, gpu_ids)
+        #net.to(gpu_ids[0])
+        net = net.cuda()
+        gpu_list = [ int(i) for i in gpu_ids.split(',')]
+
+        net = torch.nn.DataParallel(net, gpu_list)
     init_weights(net, init_type)
     return net
 
@@ -64,7 +67,7 @@ def Upsample( in_dim , out_dim , upsample = 'basic'):
         layers = nn.Sequential(
                 nn.UpsamplingBilinear2d(scale_factor = 2),
                 nn.ReflectionPad2d(1),
-                nn.Conv2d(in_dim,out_dim,kernel_size = 3 )
+                nn.Conv2d(in_dim,out_dim,kernel_size = 3 ,stride = 1 , padding = 0)
                 )
     else:
         raise NotImplementedError('only these two...')
@@ -73,15 +76,16 @@ def Upsample( in_dim , out_dim , upsample = 'basic'):
 
 def Norm_Layer(norm , channel ):
     if norm == 'batch':
-        return functools.partial(nn.BatchNorm2d , affine = True)
+        layer =  functools.partial(nn.BatchNorm2d , affine = True , num_features = channel)
     elif norm == 'instance':
-        return functools.partial(nn.InstanceNorm2d, affine = False)
+        layer  = functools.partial(nn.InstanceNorm2d, affine = False , num_features = channel )
     elif norm == 'group' :
-        return functools.partial(nn.GroupNorm , num_groups = (channel / 10) , num_channels = channel )
+        layer =  functools.partial(nn.GroupNorm , num_groups = (channel / 10) , num_channels = channel )
     elif norm == 'none' :
-        return None
+        layer = None
     else:
         raise NotImplementedError('only these two qwq')
+    return layer
 
 def NL(nl):
     if nl == 'relu':
@@ -110,36 +114,36 @@ class Generator_Unet_in(nn.Module):
         enc = nn.Conv2d(in_dim+nz, ngf ,4,2,1)
         encs.append(enc)
         enc = nn.Sequential(
-                NL(nl),
+                NL('lrelu'),
                 nn.Conv2d(ngf , ngf*2 ,4 , 2 ,1),
-                Norm_Layer( 'lrelu' , ngf * 2)
+                Norm_Layer( norm , ngf * 2)()
                 )
         encs.append(enc)
         enc = nn.Sequential(
-                NL(nl),
-                nn.Conv2d(ngf*2 , ngf * 4 , 2, 1),
-                Norm_Layer( 'lrelu' , ngf * 4)
+                NL('lrelu'),
+                nn.Conv2d(ngf*2 , ngf * 4 ,4 , 2, 1),
+                Norm_Layer( norm , ngf * 4)()
                 )
         encs.append(enc)
         enc = nn.Sequential(
-                NL(nl),
-                nn.Conv2d(ngf*4 , ngf * 8 , 2, 1),
-                Norm_Layer( 'lrelu' , ngf * 8)
+                NL('lrelu'),
+                nn.Conv2d(ngf*4 , ngf * 8, 4 , 2, 1),
+                Norm_Layer( norm , ngf * 8)()
                 )
         encs.append(enc)
 
         
         for i in range(num_down - 5):
             enc = nn.Sequential(
-                NL(nl),
-                nn.Conv2d(ngf*8 , ngf * 8 , 2, 1),
-                Norm_Layer( 'lrelu' , ngf * 8)
+                NL('lrelu'),
+                nn.Conv2d(ngf*8 , ngf * 8,4  , 2, 1),
+                Norm_Layer( norm , ngf * 8)()
                 )
             encs.append(enc)
             
         enc = nn.Sequential(
-            NL(nl),
-            nn.Conv2d(ngf*8 , ngf * 8 , 2, 1),
+            NL('lrelu'),
+            nn.Conv2d(ngf*8 , ngf * 8 , 4 , 2, 1),
             )
         encs.append(enc)
         
@@ -148,34 +152,35 @@ class Generator_Unet_in(nn.Module):
         dec = nn.Sequential(
                 NL(nl),
                 Upsample(ngf*8,ngf*8,upsample = upsample),
-                Norm_Layer(norm , ngf*8)
+                Norm_Layer(norm , ngf*8)()
                 )
         decs.append(dec)
         
         for i in range(num_down - 5):
             dec = []
             dec.append(NL(nl))
-            dec.append( Upsample(ngf * 8 * 2 , ngf * 8 * 2, upsample = upsample))
+            dec.append( Upsample(ngf * 8 * 2 , ngf * 8 , upsample = upsample))
+            dec.append(Norm_Layer(norm, ngf * 8 * 2)())
             if dropout:
                 dec.append(nn.Dropout(0.5))
-            decs.append(Norm_Layer(norm, ngf * 8 * 2))
+            decs.append( nn.Sequential(*dec) )
         
         dec = nn.Sequential(
                 NL(nl),
-                Upsample(ngf * 8 * 2, ngf * 4 * 2, upsample = upsample),
-                Norm_Layer(norm , ngf * 4 * 2)
+                Upsample(ngf * 8 * 2, ngf * 4 , upsample = upsample),
+                Norm_Layer(norm , ngf * 4 )()
                 )
         decs.append(dec)
         dec = nn.Sequential(
                 NL(nl),
-                Upsample(ngf * 4 * 2, ngf * 2 * 2, upsample = upsample),
-                Norm_Layer(norm , ngf * 4 * 2)
+                Upsample(ngf * 4 * 2, ngf * 2, upsample = upsample),
+                Norm_Layer(norm , ngf * 2 )()
                 )
         decs.append(dec)
         dec = nn.Sequential(
                 NL(nl),
-                Upsample(ngf * 2 * 2, ngf * 1 * 2, upsample = upsample),
-                Norm_Layer(norm , ngf * 4 * 2)
+                Upsample(ngf *2 * 2, ngf * 1 , upsample = upsample),
+                Norm_Layer(norm , ngf  )()
                 )
         decs.append(dec)
         dec = nn.Sequential(
@@ -196,8 +201,8 @@ class Generator_Unet_in(nn.Module):
         if self.nz <= 0 :  
             out = _input    
         else :
-            z = z.view(z.size[0] , z.size[1] , 1 , 1).expand(z.size[0],z.size[1], _input.size[2], _input.size[3])
-            out = torch.cat( _input , z , dim = 1 )
+            z = z.view(z.size(0) , z.size(1) , 1 , 1).expand(z.size(0) ,z.size(1) , _input.size(2) , _input.size(3))
+            out = torch.cat( [_input , z] , dim = 1 )
         
         
         for enc in self.encs:
@@ -233,36 +238,36 @@ class Generator_Unet_all(nn.Module):
         enc = nn.Conv2d(in_dim+nz, ngf  ,4,2,1)
         encs.append(enc)
         enc = nn.Sequential(
-                NL(nl),
+                NL('lrelu'),
                 nn.Conv2d(ngf + nz , ngf*2  ,4 , 2 ,1),
-                Norm_Layer( 'relu' , ngf * 2)
+                Norm_Layer( norm , ngf * 2)()
                 )
         encs.append(enc)
         enc = nn.Sequential(
-                NL(nl),
-                nn.Conv2d(ngf*2 + nz, ngf * 4  , 2, 1),
-                Norm_Layer( 'relu' , ngf * 4)
+                NL('lrelu'),
+                nn.Conv2d(ngf*2 + nz, ngf * 4 , 4  , 2, 1),
+                Norm_Layer( norm , ngf * 4)()
                 )
         encs.append(enc)
         enc = nn.Sequential(
-                NL(nl),
-                nn.Conv2d(ngf*4 + nz , ngf * 8  , 2, 1),
-                Norm_Layer( 'relu' , ngf * 8)
+                NL('lrelu'),
+                nn.Conv2d(ngf*4 + nz , ngf * 8 ,4 , 2, 1),
+                Norm_Layer( norm , ngf * 8)()
                 )
         encs.append(enc)
 
         
         for i in range(num_down - 5):
             enc = nn.Sequential(
-                NL(nl),
-                nn.Conv2d(ngf*8 + nz, ngf * 8 , 2, 1),
-                Norm_Layer( 'relu' , ngf * 8)
+                NL('lrelu'),
+                nn.Conv2d(ngf*8 + nz, ngf * 8,4 , 2, 1),
+                Norm_Layer( norm , ngf * 8)()
                 )
             encs.append(enc)
             
         enc = nn.Sequential(
-            NL(nl),
-            nn.Conv2d(ngf*8 + nz , ngf * 8 , 2, 1),
+            NL('lrelu'),
+            nn.Conv2d(ngf*8 + nz , ngf * 8 , 4 , 2, 1),
             )
         encs.append(enc)
         
@@ -271,34 +276,35 @@ class Generator_Unet_all(nn.Module):
         dec = nn.Sequential(
                 NL(nl),
                 Upsample(ngf*8,ngf*8,upsample = upsample),
-                Norm_Layer(norm , ngf*8)
+                Norm_Layer(norm , ngf*8)()
                 )
         decs.append(dec)
         
         for i in range(num_down - 5):
             dec = []
             dec.append(NL(nl))
-            dec.append( Upsample(ngf * 8 * 2 , ngf * 8 * 2, upsample = upsample))
+            dec.append( Upsample(ngf * 8 * 2 , ngf * 8 , upsample = upsample))
+            dec.append(Norm_Layer(norm, ngf * 8 )())
             if dropout:
                 dec.append(nn.Dropout(0.5))
-            decs.append(Norm_Layer(norm, ngf * 8 * 2))
+            decs.append( nn.Sequential(*dec) )
         
         dec = nn.Sequential(
                 NL(nl),
-                Upsample(ngf * 8 * 2, ngf * 4 * 2, upsample = upsample),
-                Norm_Layer(norm , ngf * 4 * 2)
+                Upsample(ngf * 8 * 2, ngf * 4 , upsample = upsample),
+                Norm_Layer(norm , ngf * 4 )()
                 )
         decs.append(dec)
         dec = nn.Sequential(
                 NL(nl),
-                Upsample(ngf * 4 * 2, ngf * 2 * 2, upsample = upsample),
-                Norm_Layer(norm , ngf * 4 * 2)
+                Upsample(ngf * 4 * 2, ngf * 2 , upsample = upsample),
+                Norm_Layer(norm , ngf * 2)()
                 )
         decs.append(dec)
         dec = nn.Sequential(
                 NL(nl),
-                Upsample(ngf * 2 * 2, ngf * 1 * 2, upsample = upsample),
-                Norm_Layer(norm , ngf * 4 * 2)
+                Upsample(ngf * 2 * 2, ngf * 1 , upsample = upsample),
+                Norm_Layer(norm , ngf * 1 )()
                 )
         decs.append(dec)
         dec = nn.Sequential(
@@ -326,13 +332,18 @@ class Generator_Unet_all(nn.Module):
         
         else :
             
+            
             out = _input
+           
+            
             for enc in self.encs:
-                temp = z.view(z.size[0] , z.size[1] , 1 , 1).expand(z.size[0],z.size[1], out.size[2], out.size[3])
-                out = torch.cat( out , temp , dim = 1 )
+                temp = z.view(z.size(0) , z.size(1) , 1 , 1).expand(z.size(0) ,z.size(1), out.size(2), out.size(3))
+                
+                out = torch.cat( [out , temp] , dim = 1 )
+                
                 out = enc(out)
                 enc_outs.append(out)
-        
+           
         # decode
         for i , dec in enumerate(self.decs):
             if i == 0:
@@ -340,27 +351,41 @@ class Generator_Unet_all(nn.Module):
             else:
                 out = torch.cat([out, enc_outs[self.num_down - i - 1]] , dim = 1)
                 out = dec(out)
+                #print(out.size())
                     
         return out
 
+'''
+class GANLoss(nn.Module):
+    
+    def __init__(self , real_target , fake_target , gan_mode = 'lsgan' ):
+        if gan_mode == 'lsgan' :
+            self.loss = nn.MSELoss()
+        elif gan_mode == 'dcgan' :
+            self.loss = nn.BCELoss()
+        else:
+            raise NotImplementedError('no such gan!!')
+'''
 
 
 class Encoder_resnet(nn.Module):
     
-    def __init__(self, ndf , blocks = 4 ,in_dim = 3 , out_dim = 3 , norm = 'instance' , nl = 'relu' ):
+    def __init__(self, ndf , nz , blocks = 4 ,in_dim = 3 , out_dim = 3 , norm = 'instance' , nl = 'relu' ):
+        
+        super( Encoder_resnet , self).__init__()
         
         max_ndf = 4
         self.init_conv =  nn.Conv2d(in_dim , ndf, kernel_size=4, stride=2, padding=1, bias=True)
-        self.res_blocks = []
+        self.res_blocks = nn.ModuleList()
         
         for i in range(1 , blocks):
-            feature = min( ndf * (i) , max_ndf)
-            next_feature = min( ndf * (i+1) , max_ndf)
+            feature = min( ndf * (i) , ndf * max_ndf)
+            next_feature = min( ndf * (i+1) , ndf * max_ndf)
             self.res_blocks.append(ResBlock(feature,next_feature, norm , nl))
         
         self.avg_pool = nn.AvgPool2d(8)
-        self.fc = nn.Linear(ndf * max_ndf , out_dim)
-        self.fc_var = nn.Linear( ndf * max_ndf , out_dim)
+        self.fc = nn.Linear(ndf * max_ndf , nz)
+        self.fc_var = nn.Linear( ndf * max_ndf , nz)
         
     def forward(self,x):
         
@@ -368,7 +393,11 @@ class Encoder_resnet(nn.Module):
         for block in self.res_blocks:
             out = block(out)
         out = self.avg_pool(out)
-        out = out.view( out.size[0] , -1 )
+        #print(out.size())
+        
+        out = out.view( out.size(0) , -1 )
+        
+        
         
         mu = self.fc(out)
         var = self.fc_var(out)
@@ -380,11 +409,11 @@ class Encoder_resnet(nn.Module):
 class ResBlock(nn.Module):
     
     def __init__(self, in_dim , out_dim, norm,  nl ):
-        
-        sequence = [Norm_Layer(norm,in_dim)]
+        super(ResBlock , self).__init__()
+        sequence = [Norm_Layer(norm,in_dim)()]
         sequence += [ NL(nl),
                       nn.Conv2d(in_dim, in_dim, 3, 1, 1, bias= True),
-                      Norm_Layer(norm,out_dim),
+                      Norm_Layer(norm,out_dim)(),
                       NL(nl),
                       nn.Conv2d(in_dim, out_dim, 3, 1, 1, bias= True),
                       nn.AvgPool2d(2)
@@ -457,7 +486,7 @@ class Discriminator(nn.Module):
             sequence += [
                 nn.Conv2d(feature_count, next_feature_count ,
                           kernel_size=4, stride=2, padding=1),
-                Norm_Layer(norm , next_feature_count) , 
+                Norm_Layer(norm , next_feature_count)() , 
                 nn.LeakyReLU(0.2, True)
             ]
         
@@ -467,7 +496,7 @@ class Discriminator(nn.Module):
         sequence += [
                 nn.Conv2d( next_feature_count, ndf * mul ,
                           kernel_size=4, stride=1, padding=1),
-                Norm_Layer(norm , ndf * mul) ,
+                Norm_Layer(norm , ndf * mul)() ,
                 nn.LeakyReLU(0.2, True)
             ]
         

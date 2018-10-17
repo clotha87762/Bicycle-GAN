@@ -9,7 +9,7 @@ import torch.autograd as autograd
 import torchvision.datasets as datasets
 import torchvision.models as models
 import torchvision.transforms as transforms
-import torcvision.utils as utils
+import torchvision.utils as utils
 
 import os
 from train import Train
@@ -45,7 +45,7 @@ parser.add_argument('--log_dir', type=str, default='./logs', help='models are sa
 parser.add_argument('--sample_dir', type=str, default='./sample_dir', help='models are saved here')
 
 
-parser.add_argument('--shuffle', action='store_false', help='if false, read the data serially')
+parser.add_argument('--not_shuffle', action='store_false', help='if false, read the data serially')
 parser.add_argument('--dropout', action='store_true', help='use dropout for the generator')
 parser.add_argument('--max_dataset_size', type=int, default=float("inf"), help='Maximum number of samples allowed per dataset. If the dataset directory contains more than max_dataset_size, only a subset is loaded.')
 parser.add_argument('--no_flip', action='store_true', help='if specified, do not flip the images for data argumentation')
@@ -70,16 +70,16 @@ parser.add_argument('--verbose', action='store_true', help='if specified, print 
 parser.add_argument('--suffix', default='', type=str, help='customized suffix: opt.name = opt.name + suffix: e.g., {model}_{netG}_size{loadSize}')
 
 # train options
-parser.add_argument('--display_freq', type=int, default=400, help='frequency of showing training results on screen')
-parser.add_argument('--display_ncols', type=int, default=4, help='if positive, display all images in a single visdom web panel with certain number of images per row.')
-parser.add_argument('--display_winsize', type=int, default=256, help='display window size')
-parser.add_argument('--display_id', type=int, default=1, help='window id of the web display')
-parser.add_argument('--display_port', type=int, default=8097, help='visdom display port')
-parser.add_argument('--display_server', type=str, default="http://localhost", help='visdom server of the web display')
-parser.add_argument('--update_html_freq', type=int, default=4000, help='frequency of saving training results to html')
+#parser.add_argument('--display_freq', type=int, default=400, help='frequency of showing training results on screen')
+#parser.add_argument('--display_ncols', type=int, default=4, help='if positive, display all images in a single visdom web panel with certain number of images per row.')
+#parser.add_argument('--display_winsize', type=int, default=256, help='display window size')
+#parser.add_argument('--display_id', type=int, default=1, help='window id of the web display')
+#parser.add_argument('--display_port', type=int, default=8097, help='visdom display port')
+#parser.add_argument('--display_server', type=str, default="http://localhost", help='visdom server of the web display')
+#parser.add_argument('--update_html_freq', type=int, default=4000, help='frequency of saving training results to html')
 parser.add_argument('--print_freq', type=int, default=100, help='frequency of showing training results on console')
 parser.add_argument('--sample_freq', type=int, default=200, help='frequency of saving the latest results')
-parser.add_argument('--save_freq', type=int, default=5, help='frequency of saving checkpoints at the end of epochs')
+parser.add_argument('--save_freq', type=int, default=1, help='frequency of saving checkpoints at the end of epochs')
 parser.add_argument('--train_over', action='store_true', help='continue training: load the latest model')
 #parser.add_argument('--epoch_count', type=int, default=1, help='the starting epoch count, we save the model by <epoch_count>, <epoch_count>+<save_latest_freq>, ...')
 
@@ -92,8 +92,8 @@ parser.add_argument('--beta1', type=float, default=0.5, help='momentum term of a
 
 # learning rate
 parser.add_argument('--lr', type=float, default=0.0002, help='initial learning rate for adam')
-parser.add_argument('--lr_policy', type=str, default='lambda', help='learning rate policy: lambda|step|plateau')
-parser.add_argument('--lr_decay_iters', type=int, default=100, help='multiply by a gamma every lr_decay_iters iterations')
+#parser.add_argument('--lr_policy', type=str, default='lambda', help='learning rate policy: lambda|step|plateau')
+#parser.add_argument('--lr_decay_iters', type=int, default=100, help='multiply by a gamma every lr_decay_iters iterations')
 
 # lambda parameters
 parser.add_argument('--lambda_L1', type=float, default=10.0, help='weight for |B-G(A, E(B))|')
@@ -105,20 +105,28 @@ parser.add_argument('--use_same_D', action='store_true', help='if two Ds share t
 
 
 # eval options
-parser.add_argument('--results_dir', type=str, default='../results/', help='saves results here.')
-parser.add_argument('--num_test', type=int, default=50, help='how many test images to run')
-parser.add_argument('--n_samples', type=int, default=5, help='#samples')
-parser.add_argument('--no_encode', action='store_true', help='do not produce encoded image')
-parser.add_argument('--sync', action='store_true', help='use the same latent code for different input images')
+#parser.add_argument('--results_dir', type=str, default='../results/', help='saves results here.')
+#parser.add_argument('--num_test', type=int, default=50, help='how many test images to run')
+#parser.add_argument('--n_samples', type=int, default=5, help='#samples')
+#parser.add_argument('--no_encode', action='store_true', help='do not produce encoded image')
+#parser.add_argument('--sync', action='store_true', help='use the same latent code for different input images')
 
 
-parser.add_argument('--aspect_ratio', type=float, default=1.0, help='aspect ratio for the results')
+#parser.add_argument('--aspect_ratio', type=float, default=1.0, help='aspect ratio for the results')
 
-parser.add_argument('--phase' , type=str , defualt = 'train' , help = 'train/eval')
+parser.add_argument('--phase' , type=str , default = 'train' , help = 'train/eval')
 
 args = parser.parse_args()
 
 if __name__ == '__main__' :
+    
+    if not os.path.exists( os.path.join(args.ckpt_dir, args.run_name)):
+        os.makedirs( os.path.join(args.ckpt_dir, args.run_name) )
+    if not os.path.exists( os.path.join(args.log_dir, args.run_name)):
+        os.makedirs( os.path.join(args.log_dir, args.run_name) )
+    if not os.path.exists( os.path.join(args.sample_dir, args.run_name)):
+        os.makedirs( os.path.join(args.sample_dir, args.run_name) )
+    
     
     if args.phase == 'train' :
         trainer = Train(args)
