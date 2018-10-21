@@ -128,7 +128,7 @@ class Train(object):
         self.realA = _input['A' if self.A2B else 'B'].to(self.device)
         self.realB = _input['B' if self.A2B else 'A'].to(self.device)
         
-        #print(self.realA.size())
+        print('realA size' + str(self.realA.size()))
         
         assert self.realA.size(0) == self.realB.size(0)
         
@@ -326,6 +326,8 @@ class Train(object):
     def train(self):
         
         dataloader = CreateDataLoader(self.opt)
+        dataset = dataloader.load_data()
+        data_size = len(dataloader)
         
         writer = SummaryWriter( log_dir = self.log_dir)
         
@@ -334,7 +336,7 @@ class Train(object):
             epoch_start = time.time()
             epoch_step = 0
             
-            for j , data in enumerate(dataloader):
+            for j , data in enumerate(dataset):
                 
                 self.set_input(data)
                 self.update_bicycleGAN()
@@ -347,7 +349,7 @@ class Train(object):
                 
                 #if self.step % self.print_freq == 0 :
                 print ("[Epoch %d/%d] [Batch %d/%d] [D loss1: %f] [D loss2: %f] [Z loss: %f] [G loss: %f]" % \
-                       (i, self.epoch  , j, len(dataloader), self.d_loss1.item(), self.d_loss2.item() , self.z_loss.item(), self.eg_loss.item() ))
+                       (i, self.epoch  , j, data_size, self.d_loss1.item(), self.d_loss2.item() , self.z_loss.item(), self.eg_loss.item() ))
                 
                 if self.step % 200 == 0 :
                     writer.add_scalar('loss/g1_loss' , self.gan_loss1 , self.step)
@@ -357,6 +359,17 @@ class Train(object):
                     writer.add_scalar('loss/z_loss' , self.z_loss , self.step)
                     writer.add_scalar('loss/l1_loss' , self.l1_loss , self.step)
                     writer.add_scalar('loss/kl_loss' , self.kl_loss , self.step)
+                
+                if self.step % 500 == 0:
+                    torch.save({ 'generator' : self.generator.state_dict(),
+                              'discriminator1' : self.discriminator1.state_dict(),
+                              'discriminator2' : self.discriminator2.state_dict(),
+                              'encoder' : self.encoder.state_dict(),
+                              'opt_g' : self.opt_g.state_dict(),
+                              'opt_d1' : self.opt_d1.state_dict(),
+                              'opt_d2' : self.opt_d2.state_dict(),
+                              'opt_e' : self.opt_e.state_dict(),
+                              'step' : self.step} , os.path.join(self.ckpt_dir,self.run_name+'.ckpt'))
                 
                 if self.step % self.sample_freq == 0 :
                     encode_pair = torch.cat( [self.realA_encode , self.realB_encode , self.fakeB_encode ] , dim = 0 )
