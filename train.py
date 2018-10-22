@@ -219,11 +219,18 @@ class Train(object):
     
     def forward(self):
         
-        half = self.batch_size // 2
-        self.realA_encode = self.realA[:half]
-        self.realA_random = self.realA[half:]
-        self.realB_encode = self.realB[:half]
-        self.realB_random = self.realB[half:]
+        if self.batch_size >= 2:
+            half = self.batch_size // 2
+        
+            self.realA_encode = self.realA[:half]
+            self.realA_random = self.realA[half:]
+            self.realB_encode = self.realB[:half]
+            self.realB_random = self.realB[half:]
+        else :
+            self.realA_encode = self.realA[:]
+            self.realA_random = self.realA[:]
+            self.realB_encode = self.realB[:]
+            self.realB_random = self.realB[:]
         
         self.a_latent , self.mu , self.logvar = self.encode(self.realB_encode)
         self.fakeB_encode = self.generator(self.realA_encode , self.a_latent)
@@ -337,6 +344,8 @@ class Train(object):
             epoch_step = 0
             
             for j , data in enumerate(dataset):
+                
+                
                 
                 self.set_input(data)
                 self.update_bicycleGAN()
