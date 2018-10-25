@@ -47,6 +47,9 @@ class Train(object):
         self.A2B = True if args.direction == 'AtoB' else False
         
         
+        self.niter = self.epoch // 2
+        self.niter_decay = self.epoch // 2
+        
         self.num_thread = args.num_threads
         self.ckpt_dir = os.path.join( args.ckpt_dir ,  self.run_name)
         self.sample_dir = os.path.join( args.sample_dir, self.run_name)
@@ -79,7 +82,10 @@ class Train(object):
         self.device = torch.device('cuda:{}'.format(self.gpu_ids[0])) if self.gpu_ids else torch.device('cpu')
         
         self.step = 0
-    
+        
+        self.wgan = args.wgan # Use wgan-gp or not
+        self.lambda_gp = args.lambda_gp
+        self.lambda_drift = args.lambda_drift
         
         self.initialize()
         
@@ -110,7 +116,7 @@ class Train(object):
     def get_scheduler(self, optimizer):
         
         def lambda_rule(epoch):
-            lr_l = 1.0 - max(0, epoch - 100) / float(100 + 1)
+            lr_l = 1.0 - max(0, epoch - self.niter) / float(self.niter_decay + 1)
             return lr_l
         
         scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
@@ -206,12 +212,38 @@ class Train(object):
         z = eps.mul(std).add_(mu)
         return z, mu, logvar
     
+    def compute_gradient_penalty(self, D, real_samples, fake_samples):
+        """Calculates the gradient penalty loss for WGAN GP"""
+        # Random weight term for interpolation between real and fake samples
+        alpha = torch.Tensor(np.random.random((real_samples.size(0), 1, 1, 1))).to(self.device)
+        # Get random interpolation between real and fake samples
+        interpolates = (alpha * real_samples + ((1 - alpha) * fake_samples)).requires_grad_(True)
+        d_interpolates = D(interpolates)
+        fake = torch.Variable( torch.T(real_samples.shape[0], 1).fill_(1.0), requires_grad=False).to(self.device)
+        # Get gradient w.r.t. interpolates
+        gradients = autograd.grad(
+            outputs=d_interpolates,
+            inputs=interpolates,
+            grad_outputs=fake,
+            create_graph=True,
+            retain_graph=True,
+            only_inputs=True,
+        )[0]
+        
+        gradients = gradients.view(gradients.size(0), -1)
+        gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
+        
+        return gradient_penalty
+    
+    
     def calc_gan_loss(self, dis_outs , target_value ):
         
         losses =[]
         for dis_out in dis_outs:
             target = torch.tensor( target_value ).expand_as(dis_out).to(self.device)
+       
             losses.append( self.gan_criterion(dis_out, target ) )
+    
         
         loss = sum(losses)
         return loss
@@ -236,7 +268,7 @@ class Train(object):
         self.fakeB_encode = self.generator(self.realA_encode , self.a_latent)
         
         self.random_z = self.random_sample_z(self.realA_encode.size(0), self.nz)
-        self.fakeB_random = self.generator( self.realA_random , self.random_z)
+        self.fakeB_random = self.generator( self.realA_encode , self.random_z)
         
         self.mu2 , self.logvar2 = self.encoder( self.fakeB_random)
         
@@ -260,31 +292,54 @@ class Train(object):
     
     def update_D(self):
         
-        dis_out1_real = self.discriminator1(self.realB_encode)
-        dis_out1_fake = self.discriminator2(self.fakeB_encode.detach())
+        self.opt_d1.zero_grad() 
+
         
-        dis_out2_real = self.discriminator2(self.realB_random)
-        dis_out2_fake = self.discriminator2(self.fakeB_random.detach())
+        dis_out1_real = self.discriminator1(self.realB_encode)
+        dis_out1_fake = self.discriminator1(self.fakeB_encode.detach())
+        
+        
         
         real_target = 1.0 #torch.tensor(1.0).expand_as(dis_out1_real).to(self.device)
         fake_target = 0.0 #torch.tensor(0.0).expand_as(dis_out1_fake).to(self.device)
         
-        gan_loss1_fake = self.calc_gan_loss(dis_out1_fake , fake_target) #self.gan_criterion( dis_out1_fake , fake_target)
-        gan_loss1_real = self.calc_gan_loss(dis_out1_real , real_target) #self.gan_criterion( dis_out1_real , real_target)
-
-        self.opt_d1.zero_grad() 
+        if self.wgan:
+            gan_loss1_fake = torch.mean(dis_out1_fake)
+            gan_loss1_real = -torch.mean(dis_out1_real)
+            gp1 = self.compute_gradient_penalty( self.discriminator1 , self.realB_encode.data , self.fakeB_encode.data)
+            drift1 = dis_out1_real ** 2
+            self.d_loss1 = gan_loss1_fake + gan_loss1_real + (self.lambda_gp * gp1) + (self.lambda_drift * drift1)
+        else:
+            gan_loss1_fake = self.calc_gan_loss(dis_out1_fake , fake_target) #self.gan_criterion( dis_out1_fake , fake_target)
+            gan_loss1_real = self.calc_gan_loss(dis_out1_real , real_target) #self.gan_criterion( dis_out1_real , real_target)
+            self.d_loss1 = gan_loss1_fake  + gan_loss1_real 
         
-        self.d_loss1 = gan_loss1_fake + gan_loss1_real    
+         
+        
         self.d_loss1.backward()
         
         self.opt_d1.step()
         
-        gan_loss2_fake = self.calc_gan_loss(dis_out2_fake , fake_target) 
-        gan_loss2_real = self.calc_gan_loss(dis_out2_real , real_target)
         
         self.opt_d2.zero_grad()
         
-        self.d_loss2 = gan_loss2_fake + gan_loss2_real
+        dis_out2_real = self.discriminator2(self.realB_random)
+        dis_out2_fake = self.discriminator2(self.fakeB_random.detach())
+        
+        
+        
+        if self.wgan:
+            gan_loss2_fake = torch.mean(dis_out2_fake)
+            gan_loss2_real = torch.mean(dis_out2_real)
+            gp2 = self.compute_gradient_penalty( self.discriminator2 , self.realB_random.data , self.fakeB_random.data)
+            drift2 = dis_out2_real ** 2
+            self.d_loss2 = gan_loss2_fake + gan_loss2_real + (self.lambda_gp * gp2) + (self.lambda_drift * drift2)
+        else:
+            gan_loss2_fake = self.calc_gan_loss(dis_out2_fake , fake_target) 
+            gan_loss2_real = self.calc_gan_loss(dis_out2_real , real_target)
+            self.d_loss2 = gan_loss2_fake  + gan_loss2_real 
+        
+        #self.d_loss2 = gan_loss2_fake + gan_loss2_real
         self.d_loss2.backward()
         
         self.opt_d2.step()
@@ -307,8 +362,12 @@ class Train(object):
         real_target = 1.0
         fake_target = 0.0
         
-        self.gan_loss1 = self.calc_gan_loss(dis_out1 , real_target)#self.gan_criterion(dis_out1 , real_target)
-        self.gan_loss2 = self.calc_gan_loss(dis_out2 , real_target)#self.gan_criterion(dis_out2 , real_target)
+        if self.wgan:
+            self.gan_loss1 =  -torch.mean(dis_out1)
+            self.gan_loss2 =  -torch.mean(dis_out2)
+        else:
+            self.gan_loss1 = self.calc_gan_loss(dis_out1 , real_target) #self.gan_criterion(dis_out1 , real_target)
+            self.gan_loss2 = self.calc_gan_loss(dis_out2 , real_target) #self.gan_criterion(dis_out2 , real_target)
         
         self.gan_loss = ( self.gan_loss1 * self.lambda_GAN )   +  ( self.gan_loss2 * self.lambda_GAN2) 
         
@@ -338,7 +397,9 @@ class Train(object):
         
         writer = SummaryWriter( log_dir = self.log_dir)
         
-        for i in range(self.epoch):
+        #now_epoch = self.step // self.
+        
+        for i in range(self.niter + self.niter_decay + 1):
             
             epoch_start = time.time()
             epoch_step = 0
@@ -358,7 +419,7 @@ class Train(object):
                 
                 #if self.step % self.print_freq == 0 :
                 print ("[Epoch %d/%d] [Batch %d/%d] [D loss1: %f] [D loss2: %f] [Z loss: %f] [G loss: %f]" % \
-                       (i, self.epoch  , j, data_size, self.d_loss1.item(), self.d_loss2.item() , self.z_loss.item(), self.eg_loss.item() ))
+                       (i, self.epoch  , j * self.batch_size , data_size, self.d_loss1.item(), self.d_loss2.item() , self.z_loss.item(), self.eg_loss.item() ))
                 
                 if self.step % 200 == 0 :
                     writer.add_scalar('loss/g1_loss' , self.gan_loss1 , self.step)
@@ -381,7 +442,7 @@ class Train(object):
                               'step' : self.step} , os.path.join(self.ckpt_dir,self.run_name+'.ckpt'))
                 
                 if self.step % self.sample_freq == 0 :
-                    encode_pair = torch.cat( [self.realA_encode , self.realB_encode , self.fakeB_encode ] , dim = 0 )
+                    encode_pair = torch.cat( [self.realA_encode , self.realB_encode , self.fakeB_encode , self.fakeB_random] , dim = 0 )
                     vutils.save_image( encode_pair , self.sample_dir + '/%d.png' % self.step , normalize=True)
                 
                 # write the logs

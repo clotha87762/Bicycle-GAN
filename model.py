@@ -50,8 +50,8 @@ def init_net(net, init_type='xavier', gpu_ids=[]):
         #net.to(gpu_ids[0])
         net = net.cuda()
         gpu_list = [ int(i) for i in gpu_ids.split(',')]
-
-        net = torch.nn.DataParallel(net, gpu_list)
+        if len(gpu_list) > 1 :
+            net = torch.nn.DataParallel(net, gpu_list)
     init_weights(net, init_type)
     return net
 
@@ -222,7 +222,7 @@ class Generator_Unet_in(nn.Module):
 
 class Generator_Unet_all(nn.Module):
     
-    def __init__(self , in_dim , out_dim , nz , ngf ,dropout = False , norm = 'instance', nl = 'lrelu' , upsample = 'basic', num_down = 8 ):
+    def __init__(self , in_dim , out_dim , nz , ngf ,dropout = True , norm = 'instance', nl = 'lrelu' , upsample = 'basic', num_down = 8 ):
         
         super(Generator_Unet_all , self).__init__()
         
@@ -384,6 +384,7 @@ class Encoder_resnet(nn.Module):
             self.res_blocks.append(ResBlock(feature,next_feature, norm , nl))
         
         self.avg_pool = nn.AvgPool2d(8)
+        self.nl_layer = NL(nl)
         self.fc = nn.Linear(ndf * max_ndf , nz)
         self.fc_var = nn.Linear( ndf * max_ndf , nz)
         
@@ -392,6 +393,7 @@ class Encoder_resnet(nn.Module):
         out = self.init_conv(x)
         for block in self.res_blocks:
             out = block(out)
+        out = self.nl_layer(out)
         out = self.avg_pool(out)
         #print(out.size())
         
@@ -477,7 +479,7 @@ class Discriminator(nn.Module):
         sequence = [nn.Conv2d( in_dim , ndf, kernel_size=4, stride=2, padding=1), 
                     nn.LeakyReLU(0.2, True)]
         
-        for i in range(num_layer):
+        for i in range(0,num_layer-1):
             mul = min(2**(i) , 8)
             next_mul = min(2**(i+1) , 8 )
             feature_count = ndf * mul

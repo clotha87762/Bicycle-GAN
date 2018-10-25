@@ -97,12 +97,19 @@ parser.add_argument('--lr', type=float, default=0.0002, help='initial learning r
 
 # lambda parameters
 parser.add_argument('--lambda_L1', type=float, default=10.0, help='weight for |B-G(A, E(B))|')
+
+parser.add_argument('--lambda_gp',type=float,default = 10.0 , help = ' weight for wgan-gp in the optimization of discriminator')
+
+parser.add_argument('--lambda_drift' , type=float, default = 1e-3 , help = 'drift constraint proposed in PG-GAN')
+
 parser.add_argument('--lambda_GAN', type=float, default=1.0, help='weight on D loss. D(G(A, E(B)))')
 parser.add_argument('--lambda_GAN2', type=float, default=1.0, help='weight on D2 loss, D(G(A, random_z))')
 parser.add_argument('--lambda_z', type=float, default=0.5, help='weight for ||E(G(random_z)) - random_z||')
 parser.add_argument('--lambda_kl', type=float, default=0.01, help='weight for KL loss')
 parser.add_argument('--use_same_D', action='store_true', help='if two Ds share the weights or not')
 
+
+parser.add_argument('--wgan' , action = 'store_true' , help = ' use wgan gp or not')
 
 # eval options
 #parser.add_argument('--results_dir', type=str, default='../results/', help='saves results here.')
